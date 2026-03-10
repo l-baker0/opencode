@@ -14,14 +14,33 @@ When NOT to use the Task tool:
 - If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Task tool, to find the match more quickly
 - Other tasks that are not related to the agent descriptions above
 
+Background mode:
+- Set background=true to launch a subagent that runs asynchronously while you continue working
+- Use background mode when you have multiple independent tasks that don't depend on each other's results
+- Background tasks report completion at the end of each turn via system reminders
+- Use `subagent_status` to check progress of background tasks
+- Use `subagent_ingest` to retrieve results from completed background tasks
+- Do NOT use background mode when you need the result immediately to proceed with your current work
+
+When to use background mode vs foreground (default):
+- Foreground (background=false, default): You need the result before you can continue. The task blocks until complete.
+- Background (background=true): The task can run independently. You want to continue working on other things while it runs.
+
+Examples of good background usage:
+- Researching multiple unrelated parts of a codebase simultaneously
+- Running code analysis on several files while you work on something else
+- Exploring documentation while implementing a feature
+- Running tests or checks in parallel with other work
 
 Usage notes:
 1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses
-2. When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result. The output includes a task_id you can reuse later to continue the same subagent session.
-3. Each agent invocation starts with a fresh context unless you provide task_id to resume the same subagent session (which continues with its previous messages and tool outputs). When starting fresh, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.
-4. The agent's outputs should generally be trusted
-5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent. Tell it how to verify its work if possible (e.g., relevant test commands).
-6. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+2. For foreground tasks: when the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result. The output includes a task_id you can reuse later to continue the same subagent session.
+3. For background tasks: the agent runs asynchronously. You will be notified of completion via system reminders. Use `subagent_ingest` to retrieve results. Background tasks also return a task_id for status checks.
+4. Each agent invocation starts with a fresh context unless you provide task_id to resume the same subagent session (which continues with its previous messages and tool outputs). When starting fresh, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.
+5. The agent's outputs should generally be trusted
+6. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent. Tell it how to verify its work if possible (e.g., relevant test commands).
+7. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+8. When you have 3+ independent research or exploration tasks, prefer launching them all as background tasks in a single message, then continue with any work you can do immediately.
 
 Example usage (NOTE: The agents below are fictional examples for illustration only - use the actual agents listed above):
 
@@ -57,4 +76,17 @@ user: "Hello"
 Since the user is greeting, use the greeting-responder agent to respond with a friendly joke
 </commentary>
 assistant: "I'm going to use the Task tool to launch the with the greeting-responder agent"
+</example>
+
+<example>
+user: "I need to understand the auth system, the database layer, and the API routes"
+<commentary>
+These are three independent research tasks - launch them all as background tasks to run in parallel
+</commentary>
+assistant: I'll research all three areas simultaneously using background tasks.
+assistant: Uses the Task tool three times in a single message, each with background=true:
+  1. Task(description="Research auth system", prompt="...", subagent_type="explore", background=true)
+  2. Task(description="Research database layer", prompt="...", subagent_type="explore", background=true)
+  3. Task(description="Research API routes", prompt="...", subagent_type="explore", background=true)
+assistant: I've launched three background research tasks. I'll compile the findings once they complete.
 </example>

@@ -10,6 +10,7 @@ import { iife } from "@/util/iife"
 import { defer } from "@/util/defer"
 import { Config } from "../config/config"
 import { PermissionNext } from "@/permission/next"
+import { Subagent } from "../subagent"
 
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
@@ -22,6 +23,12 @@ const parameters = z.object({
     )
     .optional(),
   command: z.string().describe("The command that triggered this task").optional(),
+  background: z
+    .boolean()
+    .describe(
+      "Set to true to run this task in the background. The task will execute asynchronously while you continue working. Use subagent_status to check progress and subagent_ingest to retrieve results. Default is false (foreground/blocking).",
+    )
+    .optional(),
 })
 
 export const TaskTool = Tool.define("task", async (ctx) => {
@@ -61,6 +68,49 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       const agent = await Agent.get(params.subagent_type)
       if (!agent) throw new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
 
+      // ── Background mode: fire-and-forget via Subagent system ──────
+      if (params.background) {
+        const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
+        if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
+
+        const model = agent.model ?? {
+          modelID: msg.info.modelID,
+          providerID: msg.info.providerID,
+        }
+
+        const info = await Subagent.spawn({
+          sessionID: ctx.sessionID,
+          agentName: agent.name,
+          prompt: params.prompt,
+          description: params.description,
+          providerID: model.providerID,
+          modelID: model.modelID,
+          senderID: ctx.messageID,
+        })
+
+        return {
+          title: params.description,
+          metadata: {
+            subagentID: info.id,
+            agentName: info.agentName,
+            status: info.status,
+            background: true,
+            model,
+          },
+          output: [
+            `Background task spawned successfully.`,
+            ``,
+            `Subagent ID: ${info.id}`,
+            `Agent: ${info.agentName}`,
+            `Status: ${info.status}`,
+            ``,
+            `The task is now running in the background. You will be notified when it completes.`,
+            `Use \`subagent_status\` to check progress, or \`subagent_ingest\` to retrieve results once complete.`,
+          ].join("\n"),
+        }
+      }
+
+      // ── Foreground mode: existing blocking behavior ───────────────
       const hasTaskPermission = agent.permission.some((rule) => rule.permission === "task")
 
       const session = await iife(async () => {
