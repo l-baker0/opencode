@@ -27,17 +27,17 @@ function boot(input: { directory: string; init?: () => Promise<any>; worktree?: 
     const ctx =
       input.project && input.worktree
         ? {
-            directory: input.directory,
-            worktree: input.worktree,
-            project: input.project,
-          }
+          directory: input.directory,
+          worktree: input.worktree,
+          project: input.project,
+        }
         : await project
-            .runPromise((svc) => svc.fromDirectory(input.directory))
-            .then(({ project, sandbox }) => ({
-              directory: input.directory,
-              worktree: sandbox,
-              project,
-            }))
+          .runPromise((svc) => svc.fromDirectory(input.directory))
+          .then(({ project, sandbox }) => ({
+            directory: input.directory,
+            worktree: sandbox,
+            project,
+          }))
     await context.provide(ctx, async () => {
       await input.init?.()
     })
@@ -96,7 +96,7 @@ export const Instance = {
     if (AppFileSystem.contains(instance.directory, filepath)) return true
     // Non-git projects set worktree to "/" which would match ANY absolute path.
     // Skip worktree check in this case to preserve external_directory permissions.
-    if (Instance.worktree === "/") return false
+    if (instance.worktree === "/") return false
     return AppFileSystem.contains(instance.worktree, filepath)
   },
   /**

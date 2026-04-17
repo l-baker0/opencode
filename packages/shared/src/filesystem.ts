@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { dirname, join, relative, resolve as pathResolve } from "path"
+import { dirname, isAbsolute, join, relative, resolve as pathResolve } from "path"
 import { realpathSync } from "fs"
 import * as NFS from "fs/promises"
 import { lookup } from "mime-types"
@@ -11,7 +11,7 @@ export namespace AppFileSystem {
   export class FileSystemError extends Schema.TaggedErrorClass<FileSystemError>()("FileSystemError", {
     method: Schema.String,
     cause: Schema.optional(Schema.Defect),
-  }) {}
+  }) { }
 
   export type Error = PlatformError | FileSystemError
 
@@ -36,7 +36,7 @@ export namespace AppFileSystem {
     readonly globMatch: (pattern: string, filepath: string) => boolean
   }
 
-  export class Service extends Context.Service<Service, Interface>()("@opencode/FileSystem") {}
+  export class Service extends Context.Service<Service, Interface>()("@opencode/FileSystem") { }
 
   export const layer = Layer.effect(
     Service,
@@ -186,9 +186,16 @@ export namespace AppFileSystem {
     return lookup(p) || "application/octet-stream"
   }
 
+  function rootRelativeWindowsPath(p: string): string {
+    if (process.platform !== "win32") return p
+    if (!/^[\\/](?![\\/])/.test(p)) return p
+    if (/^[A-Za-z]:/.test(p)) return p
+    return `${process.env.SystemDrive ?? "C:"}${p}`
+  }
+
   export function normalizePath(p: string): string {
     if (process.platform !== "win32") return p
-    const resolved = pathResolve(windowsPath(p))
+    const resolved = pathResolve(rootRelativeWindowsPath(windowsPath(p)))
     try {
       return realpathSync.native(resolved)
     } catch {
@@ -206,7 +213,7 @@ export namespace AppFileSystem {
   }
 
   export function resolve(p: string): string {
-    const resolved = pathResolve(windowsPath(p))
+    const resolved = pathResolve(rootRelativeWindowsPath(windowsPath(p)))
     try {
       return normalizePath(realpathSync(resolved))
     } catch (e: any) {
@@ -227,10 +234,11 @@ export namespace AppFileSystem {
   export function overlaps(a: string, b: string) {
     const relA = relative(a, b)
     const relB = relative(b, a)
-    return !relA || !relA.startsWith("..") || !relB || !relB.startsWith("..")
+    return (!relA || (!relA.startsWith("..") && !isAbsolute(relA))) || (!relB || (!relB.startsWith("..") && !isAbsolute(relB)))
   }
 
   export function contains(parent: string, child: string) {
-    return !relative(parent, child).startsWith("..")
+    const rel = relative(parent, child)
+    return !rel || (!rel.startsWith("..") && !isAbsolute(rel))
   }
 }

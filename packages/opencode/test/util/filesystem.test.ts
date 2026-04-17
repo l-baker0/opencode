@@ -545,6 +545,13 @@ describe("filesystem", () => {
       expect(Filesystem.resolve(`/${drive}:`)).toBe(Filesystem.resolve(`${drive}:/`))
     })
 
+    test("resolves root-relative absolute paths on Windows", async () => {
+      if (process.platform !== "win32") return
+      await using tmp = await tmpdir()
+      const rest = tmp.path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/")
+      expect(Filesystem.normalizePath(`/${rest}`)).toBe(Filesystem.normalizePath(tmp.path))
+    })
+
     test("resolves Git Bash and MSYS2 paths on Windows", async () => {
       // Git Bash and MSYS2 both use /<drive>/... paths on Windows.
       if (process.platform !== "win32") return

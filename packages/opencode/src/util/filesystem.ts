@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, stat as statFile, writeFile } from "fs/promises"
 import { createWriteStream, existsSync, statSync } from "fs"
 import { realpathSync } from "fs"
-import { dirname, join, relative, resolve as pathResolve, win32 } from "path"
+import { dirname, isAbsolute, join, relative, resolve as pathResolve, win32 } from "path"
 import { Readable } from "stream"
 import { pipeline } from "stream/promises"
 import { Glob } from "@opencode-ai/shared/util/glob"
@@ -105,6 +105,13 @@ export async function mimeType(p: string): Promise<string> {
   return lookup(p) || "application/octet-stream"
 }
 
+function rootRelativeWindowsPath(p: string): string {
+  if (process.platform !== "win32") return p
+  if (!/^[\\/](?![\\/])/.test(p)) return p
+  if (/^[A-Za-z]:/.test(p)) return p
+  return `${process.env.SystemDrive ?? "C:"}${p}`
+}
+
 /**
  * On Windows, normalize a path to its canonical casing using the filesystem.
  * This is needed because Windows paths are case-insensitive but LSP servers
@@ -112,7 +119,7 @@ export async function mimeType(p: string): Promise<string> {
  */
 export function normalizePath(p: string): string {
   if (process.platform !== "win32") return p
-  const resolved = win32.normalize(win32.resolve(windowsPath(p)))
+  const resolved = win32.normalize(win32.resolve(rootRelativeWindowsPath(windowsPath(p))))
   try {
     return realpathSync.native(resolved)
   } catch {
@@ -133,7 +140,7 @@ export function normalizePathPattern(p: string): string {
 // Also resolves symlinks so that callers using the result as a cache key
 // always get the same canonical path for a given physical directory.
 export function resolve(p: string): string {
-  const resolved = pathResolve(windowsPath(p))
+  const resolved = pathResolve(rootRelativeWindowsPath(windowsPath(p)))
   try {
     return normalizePath(realpathSync(resolved))
   } catch (e) {
@@ -158,11 +165,12 @@ export function windowsPath(p: string): string {
 export function overlaps(a: string, b: string) {
   const relA = relative(a, b)
   const relB = relative(b, a)
-  return !relA || !relA.startsWith("..") || !relB || !relB.startsWith("..")
+  return (!relA || (!relA.startsWith("..") && !isAbsolute(relA))) || (!relB || (!relB.startsWith("..") && !isAbsolute(relB)))
 }
 
 export function contains(parent: string, child: string) {
-  return !relative(parent, child).startsWith("..")
+  const rel = relative(parent, child)
+  return !rel || (!rel.startsWith("..") && !isAbsolute(rel))
 }
 
 export async function findUp(
