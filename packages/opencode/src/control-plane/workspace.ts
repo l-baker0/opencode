@@ -25,6 +25,8 @@ import { errorData } from "@/util/error"
 import { AppRuntime } from "@/effect/app-runtime"
 import { EventSequenceTable } from "@/sync/event.sql"
 import { waitEvent } from "./util"
+import { SpanStatusCode, trace, type Span } from "@opentelemetry/api"
+import { Trace } from "@/util"
 
 export const Info = WorkspaceInfo.meta({
   ref: "Workspace",
@@ -141,124 +143,67 @@ const SessionRestoreInput = z.object({
 })
 
 export const sessionRestore = fn(SessionRestoreInput, async (input) => {
-  log.info("session restore requested", {
-    workspaceID: input.workspaceID,
-    sessionID: input.sessionID,
-  })
-  try {
-    const space = await get(input.workspaceID)
-    if (!space) throw new Error(`Workspace not found: ${input.workspaceID}`)
-
-    const adaptor = await getAdaptor(space.projectID, space.type)
-    const target = await adaptor.target(space)
-
-    // Need to switch the workspace of the session
-    SyncEvent.run(Session.Event.Updated, {
-      sessionID: input.sessionID,
-      info: {
-        workspaceID: input.workspaceID,
-      },
+  const tracer = trace.getTracer("opencode")
+  return tracer.startActiveSpan("control-plane.workspace.sessionRestore", async (span: Span) => {
+    span.setAttributes({
+      "opencode.workspace_id": input.workspaceID,
+      "opencode.session_id": input.sessionID,
     })
 
-    const rows = Database.use((db) =>
-      db
-        .select({
-          id: EventTable.id,
-          aggregateID: EventTable.aggregate_id,
-          seq: EventTable.seq,
-          type: EventTable.type,
-          data: EventTable.data,
-        })
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, input.sessionID))
-        .orderBy(asc(EventTable.seq))
-        .all(),
-    )
-    if (rows.length === 0) throw new Error(`No events found for session: ${input.sessionID}`)
-
-    const all = rows
-
-    const size = 10
-    const sets = Array.from({ length: Math.ceil(all.length / size) }, (_, i) => all.slice(i * size, (i + 1) * size))
-    const total = sets.length
-    log.info("session restore prepared", {
-      workspaceID: input.workspaceID,
-      sessionID: input.sessionID,
-      workspaceType: space.type,
-      directory: space.directory,
-      target: target.type === "remote" ? String(route(target.url, "/sync/replay")) : target.directory,
-      events: all.length,
-      batches: total,
-      first: all[0]?.seq,
-      last: all.at(-1)?.seq,
-    })
-    GlobalBus.emit("event", {
-      directory: "global",
-      workspace: input.workspaceID,
-      payload: {
-        type: Event.Restore.type,
-        properties: {
-          workspaceID: input.workspaceID,
-          sessionID: input.sessionID,
-          total,
-          step: 0,
-        },
-      },
-    })
-    for (const [i, events] of sets.entries()) {
-      log.info("session restore batch starting", {
+    try {
+      log.info("session restore requested", {
         workspaceID: input.workspaceID,
         sessionID: input.sessionID,
-        step: i + 1,
-        total,
-        events: events.length,
-        first: events[0]?.seq,
-        last: events.at(-1)?.seq,
-        target: target.type === "remote" ? String(route(target.url, "/sync/replay")) : target.directory,
       })
-      if (target.type === "local") {
-        SyncEvent.replayAll(events)
-        log.info("session restore batch replayed locally", {
+
+      const space = await get(input.workspaceID)
+      if (!space) throw new Error(`Workspace not found: ${input.workspaceID}`)
+
+      span.setAttribute("opencode.project_id", space.projectID)
+
+      const adaptor = await getAdaptor(space.projectID, space.type)
+      const target = await adaptor.target(space)
+
+      // Need to switch the workspace of the session
+      SyncEvent.run(Session.Event.Updated, {
+        sessionID: input.sessionID,
+        info: {
           workspaceID: input.workspaceID,
-          sessionID: input.sessionID,
-          step: i + 1,
-          total,
-          events: events.length,
-        })
-      } else {
-        const url = route(target.url, "/sync/replay")
-        const headers = new Headers(target.headers)
-        headers.set("content-type", "application/json")
-        const res = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            directory: space.directory ?? "",
-            events,
-          }),
-        })
-        if (!res.ok) {
-          const body = await res.text()
-          log.error("session restore batch failed", {
-            workspaceID: input.workspaceID,
-            sessionID: input.sessionID,
-            step: i + 1,
-            total,
-            status: res.status,
-            body,
+        },
+      })
+
+      const rows = Database.use((db) =>
+        db
+          .select({
+            id: EventTable.id,
+            aggregateID: EventTable.aggregate_id,
+            seq: EventTable.seq,
+            type: EventTable.type,
+            data: EventTable.data,
           })
-          throw new Error(
-            `Failed to replay session ${input.sessionID} into workspace ${input.workspaceID}: HTTP ${res.status} ${body}`,
-          )
-        }
-        log.info("session restore batch posted", {
-          workspaceID: input.workspaceID,
-          sessionID: input.sessionID,
-          step: i + 1,
-          total,
-          status: res.status,
-        })
-      }
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, input.sessionID))
+          .orderBy(asc(EventTable.seq))
+          .all(),
+      )
+      if (rows.length === 0) throw new Error(`No events found for session: ${input.sessionID}`)
+
+      const all = rows
+
+      const size = 10
+      const sets = Array.from({ length: Math.ceil(all.length / size) }, (_, i) => all.slice(i * size, (i + 1) * size))
+      const total = sets.length
+      log.info("session restore prepared", {
+        workspaceID: input.workspaceID,
+        sessionID: input.sessionID,
+        workspaceType: space.type,
+        directory: space.directory,
+        target: target.type === "remote" ? String(route(target.url, "/sync/replay")) : target.directory,
+        events: all.length,
+        batches: total,
+        first: all[0]?.seq,
+        last: all.at(-1)?.seq,
+      })
       GlobalBus.emit("event", {
         directory: "global",
         workspace: input.workspaceID,
@@ -268,29 +213,108 @@ export const sessionRestore = fn(SessionRestoreInput, async (input) => {
             workspaceID: input.workspaceID,
             sessionID: input.sessionID,
             total,
-            step: i + 1,
+            step: 0,
           },
         },
       })
-    }
+      for (const [i, events] of sets.entries()) {
+        log.info("session restore batch starting", {
+          workspaceID: input.workspaceID,
+          sessionID: input.sessionID,
+          step: i + 1,
+          total,
+          events: events.length,
+          first: events[0]?.seq,
+          last: events.at(-1)?.seq,
+          target: target.type === "remote" ? String(route(target.url, "/sync/replay")) : target.directory,
+        })
+        if (target.type === "local") {
+          SyncEvent.replayAll(events)
+          log.info("session restore batch replayed locally", {
+            workspaceID: input.workspaceID,
+            sessionID: input.sessionID,
+            step: i + 1,
+            total,
+            events: events.length,
+          })
+        } else {
+          const url = route(target.url, "/sync/replay")
+          const headers = Trace.headers(target.headers, {
+            projectID: space.projectID,
+            sessionID: input.sessionID,
+            workspaceID: input.workspaceID,
+          })
+          headers.set("content-type", "application/json")
+          const res = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              directory: space.directory ?? "",
+              events,
+            }),
+          })
+          if (!res.ok) {
+            const body = await res.text()
+            log.error("session restore batch failed", {
+              workspaceID: input.workspaceID,
+              sessionID: input.sessionID,
+              step: i + 1,
+              total,
+              status: res.status,
+              body,
+            })
+            throw new Error(
+              `Failed to replay session ${input.sessionID} into workspace ${input.workspaceID}: HTTP ${res.status} ${body}`,
+            )
+          }
+          log.info("session restore batch posted", {
+            workspaceID: input.workspaceID,
+            sessionID: input.sessionID,
+            step: i + 1,
+            total,
+            status: res.status,
+          })
+        }
+        GlobalBus.emit("event", {
+          directory: "global",
+          workspace: input.workspaceID,
+          payload: {
+            type: Event.Restore.type,
+            properties: {
+              workspaceID: input.workspaceID,
+              sessionID: input.sessionID,
+              total,
+              step: i + 1,
+            },
+          },
+        })
+      }
 
-    log.info("session restore complete", {
-      workspaceID: input.workspaceID,
-      sessionID: input.sessionID,
-      batches: total,
-    })
+      log.info("session restore complete", {
+        workspaceID: input.workspaceID,
+        sessionID: input.sessionID,
+        batches: total,
+      })
 
-    return {
-      total,
+      return {
+        total,
+      }
+    } catch (err) {
+      span.recordException(err instanceof Error ? err : new Error(String(err)))
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
+      })
+      log.error("session restore failed", {
+        workspaceID: input.workspaceID,
+        sessionID: input.sessionID,
+        error: errorData(err),
+      })
+      throw err
+    } finally {
+      span.end()
     }
-  } catch (err) {
-    log.error("session restore failed", {
-      workspaceID: input.workspaceID,
-      sessionID: input.sessionID,
-      error: errorData(err),
-    })
-    throw err
-  }
+  })
 })
 
 export function list(project: Project.Info) {
@@ -437,7 +461,10 @@ async function syncWorkspace(space: Info, signal: AbortSignal) {
 
     const res = await fetch(route(target.url, "/global/event"), {
       method: "GET",
-      headers: target.headers,
+      headers: Trace.headers(target.headers, {
+        projectID: space.projectID,
+        workspaceID: space.id,
+      }),
       signal,
     }).catch((err: unknown) => {
       setStatus(space.id, "error", err instanceof Error ? err.message : String(err))

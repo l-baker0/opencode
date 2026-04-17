@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import type { UpgradeWebSocket } from "hono/ws"
-import { Log } from "@/util"
+import { SpanStatusCode, trace, type SpanContext } from "@opentelemetry/api"
+import { Log, Trace } from "@/util"
 import * as Fence from "./fence"
 import type { WorkspaceID } from "@/control-plane/schema"
 import { Workspace } from "@/control-plane/workspace"
@@ -20,17 +21,23 @@ const hop = new Set([
 
 type Msg = string | ArrayBuffer | Uint8Array
 
-function headers(req: Request, extra?: HeadersInit) {
+export function requestHeaders(
+  req: Request,
+  extra?: HeadersInit,
+  workspaceID?: WorkspaceID,
+  spanContext?: SpanContext | null,
+) {
   const out = new Headers(req.headers)
   for (const key of hop) out.delete(key)
   out.delete("accept-encoding")
   out.delete("x-opencode-directory")
   out.delete("x-opencode-workspace")
-  if (!extra) return out
-  for (const [key, value] of new Headers(extra).entries()) {
-    out.set(key, value)
+  if (extra) {
+    for (const [key, value] of new Headers(extra).entries()) {
+      out.set(key, value)
+    }
   }
-  return out
+  return Trace.headers(out, { workspaceID }, spanContext)
 }
 
 function protocols(req: Request) {
@@ -104,32 +111,46 @@ const app = (upgrade: UpgradeWebSocket) =>
 const log = Log.Default.clone().tag("service", "server-proxy")
 
 export async function http(url: string | URL, extra: HeadersInit | undefined, req: Request, workspaceID: WorkspaceID) {
-  if (!Workspace.isSyncing(workspaceID)) {
-    return new Response(`broken sync connection for workspace: ${workspaceID}`, {
-      status: 503,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-      },
+  const tracer = trace.getTracer("opencode")
+  return tracer.startActiveSpan("server.proxy.http", async (span) => {
+    span.setAttributes({
+      "opencode.workspace_id": workspaceID,
+      "http.method": req.method,
+      "http.url": String(url),
     })
-  }
 
-  return fetch(
-    new Request(url, {
-      method: req.method,
-      headers: headers(req, extra),
-      body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-      redirect: "manual",
-      signal: req.signal,
-    }),
-  ).then((res) => {
-    const sync = Fence.parse(res.headers)
-    const next = new Headers(res.headers)
-    next.delete("content-encoding")
-    next.delete("content-length")
+    try {
+      if (!Workspace.isSyncing(workspaceID)) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: `broken sync connection for workspace: ${workspaceID}`,
+        })
+        return new Response(`broken sync connection for workspace: ${workspaceID}`, {
+          status: 503,
+          headers: {
+            "content-type": "text/plain; charset=utf-8",
+          },
+        })
+      }
 
-    const done = sync ? Fence.wait(workspaceID, sync, req.signal) : Promise.resolve()
+      const res = await fetch(
+        new Request(url, {
+          method: req.method,
+          headers: requestHeaders(req, extra, workspaceID),
+          body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+          redirect: "manual",
+          signal: req.signal,
+        }),
+      )
 
-    return done.then(async () => {
+      const sync = Fence.parse(res.headers)
+      const next = new Headers(res.headers)
+      next.delete("content-encoding")
+      next.delete("content-length")
+
+      const done = sync ? Fence.wait(workspaceID, sync, req.signal) : Promise.resolve()
+
+      await done
       console.log("proxy http response", {
         method: req.method,
         request: req.url,
@@ -142,7 +163,16 @@ export async function http(url: string | URL, extra: HeadersInit | undefined, re
         statusText: res.statusText,
         headers: next,
       })
-    })
+    } catch (err) {
+      span.recordException(err instanceof Error ? err : new Error(String(err)))
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
+      })
+      throw err
+    } finally {
+      span.end()
+    }
   })
 }
 
