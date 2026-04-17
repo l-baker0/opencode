@@ -2,12 +2,19 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "@tsconfig/bun/tsconfig.json",
   "compilerOptions": {
+    "moduleResolution": "bundler",
+    "types": [
+      "bun-types"
+    ],
     "noUncheckedIndexedAccess": false,
     "plugins": [
       {
         "name": "@effect/language-service",
         "transform": "@effect/language-service/transform",
-        "namespaceImportPackages": ["effect", "@effect/*"]
+        "namespaceImportPackages": [
+          "effect",
+          "@effect/*"
+        ]
       }
     ]
   }
