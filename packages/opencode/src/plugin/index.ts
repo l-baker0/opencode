@@ -167,7 +167,7 @@ export const layer = Layer.effect(
           PluginLoader.loadExternal({
             items: plugins,
             kind: "server",
-            wait: () => config.waitForDependencies(),
+            wait: () => Effect.runPromise(config.waitForDependencies()),
             report: {
               start(candidate) {
                 log.info("loading plugin", { path: candidate.plan.spec })
