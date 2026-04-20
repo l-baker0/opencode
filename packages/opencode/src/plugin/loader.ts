@@ -15,23 +15,30 @@ import path from "path"
 import { fileURLToPath } from "url"
 
 export namespace PluginLoader {
+  // A normalized plugin declaration derived from config before any filesystem or npm work happens.
   export type Plan = {
     spec: string
     options: ConfigPlugin.Options | undefined
     deprecated: boolean
   }
+
+  // A plugin that has been resolved to a concrete target and entrypoint on disk.
   export type Resolved = Plan & {
     source: PluginSource
     target: string
     entry: string
     pkg?: PluginPackage
   }
+
+  // A plugin target we could inspect, but which does not expose the requested kind of entrypoint.
   export type Missing = Plan & {
     source: PluginSource
     target: string
     pkg?: PluginPackage
     message: string
   }
+
+  // A resolved plugin whose module has been imported successfully.
   export type Loaded = Resolved & {
     mod: Record<string, unknown>
   }
@@ -39,8 +46,11 @@ export namespace PluginLoader {
   type Candidate = { origin: ConfigPlugin.Origin; plan: Plan }
   type Attempt<R> = { value: R | undefined; retry: boolean }
   type Report = {
+    // Called before each attempt so callers can log initial load attempts and retries uniformly.
     start?: (candidate: Candidate, retry: boolean) => void
+    // Called when the package exists but does not provide the requested entrypoint.
     missing?: (candidate: Candidate, retry: boolean, message: string, resolved: Missing) => void
+    // Called for operational failures such as install, compatibility, or dynamic import errors.
     error?: (
       candidate: Candidate,
       retry: boolean,
@@ -50,11 +60,16 @@ export namespace PluginLoader {
     ) => void
   }
 
+  // Normalize a config item into the loader's internal representation.
   function plan(item: ConfigPlugin.Spec): Plan {
     const spec = ConfigPlugin.pluginSpecifier(item)
     return { spec, options: ConfigPlugin.pluginOptions(item), deprecated: isDeprecatedPlugin(spec) }
   }
 
+  // Resolve a configured plugin into a concrete entrypoint that can later be imported.
+  //
+  // The stages here intentionally separate install/target resolution, entrypoint detection,
+  // and compatibility checks so callers can report the exact reason a plugin was skipped.
   export async function resolve(
     plan: Plan,
     kind: PluginKind,
@@ -63,6 +78,7 @@ export namespace PluginLoader {
     | { ok: false; stage: "missing"; value: Missing }
     | { ok: false; stage: "install" | "entry" | "compatibility"; error: unknown }
   > {
+    // First make sure the plugin exists locally, installing npm plugins on demand.
     let target = ""
     try {
       target = await resolvePluginTarget(plan.spec)
@@ -71,6 +87,7 @@ export namespace PluginLoader {
     }
     if (!target) return { ok: false, stage: "install", error: new Error(`Plugin ${plan.spec} target is empty`) }
 
+    // Then inspect the target for the requested server/tui entrypoint.
     let base
     try {
       base = await createPluginEntry(plan.spec, target, kind)
@@ -90,6 +107,8 @@ export namespace PluginLoader {
         },
       }
 
+    // npm plugins can declare which opencode versions they support; file plugins are treated
+    // as local development code and skip this compatibility gate.
     if (base.source === "npm") {
       try {
         await checkPluginCompatibility(base.target, InstallationVersion, base.pkg)
@@ -100,6 +119,7 @@ export namespace PluginLoader {
     return { ok: true, value: { ...plan, source: base.source, target: base.target, entry: base.entry, pkg: base.pkg } }
   }
 
+  // Import the resolved module only after all earlier validation has succeeded.
   export async function load(row: Resolved): Promise<{ ok: true; value: Loaded } | { ok: false; error: unknown }> {
     let mod
     try {
@@ -146,6 +166,8 @@ export namespace PluginLoader {
     return pluginSource(load.spec) === "file"
   }
 
+  // Run one candidate through the full pipeline: resolve, optionally surface a missing entry,
+  // import the module, and finally let the caller transform the loaded plugin into any result type.
   async function attempt<R>(
     candidate: Candidate,
     kind: PluginKind,
@@ -155,11 +177,17 @@ export namespace PluginLoader {
     report: Report | undefined,
   ): Promise<Attempt<R>> {
     const plan = candidate.plan
-    if (plan.deprecated) return { value: undefined, retry: false }
+
+    // Deprecated plugin packages are silently ignored because they are now built in.
+    if (plan.deprecated) return
+
     report?.start?.(candidate, retry)
+
     const resolved = await resolve(plan, kind)
     if (!resolved.ok) {
       if (resolved.stage === "missing") {
+        // Missing entrypoints are handled separately so callers can still inspect package metadata,
+        // for example to load theme files from a tui plugin package that has no code entrypoint.
         if (missing) {
           const value = await missing(resolved.value, candidate.origin, retry)
           if (value !== undefined) return { value, retry: false }
@@ -172,16 +200,18 @@ export namespace PluginLoader {
       if (!retryable) report?.error?.(candidate, retry, resolved.stage, resolved.error)
       return { value: undefined, retry: retryable }
     }
+
     const loaded = await load(resolved.value)
     if (!loaded.ok) {
       const retryable = !retry && (await shouldRetryLoad(resolved.value, loaded.error))
       if (!retryable) report?.error?.(candidate, retry, "load", loaded.error, resolved.value)
       return { value: undefined, retry: retryable }
     }
-    if (!finish) return { value: loaded.value as R, retry: false }
-    const value = await finish(loaded.value, candidate.origin, retry)
-    if (value !== undefined) return { value, retry: false }
-    return { value: undefined, retry: !retry && shouldRetryFinish(loaded.value) }
+
+    // The default behavior is to return the successfully loaded plugin as-is, but callers can
+    // provide a finisher to adapt the result into a more specific runtime shape.
+    if (!finish) return loaded.value as R
+    return finish(loaded.value, candidate.origin, retry)
   }
 
   type Input<R> = {
@@ -193,6 +223,11 @@ export namespace PluginLoader {
     report?: Report
   }
 
+  // Resolve and load all configured plugins in parallel.
+  //
+  // If `wait` is provided, file-based plugins that initially failed are retried once after the
+  // caller finishes preparing dependencies. This supports local plugins that depend on an install
+  // step happening elsewhere before their entrypoint becomes loadable.
   export async function loadExternal<R = Loaded>(input: Input<R>): Promise<R[]> {
     const candidates = input.items.map((origin) => ({ origin, plan: plan(origin.spec) }))
     const list: Array<Promise<Attempt<R>>> = []
@@ -207,6 +242,8 @@ export namespace PluginLoader {
         out[index] = await attempt(candidates[index], input.kind, true, input.finish, input.missing, input.report)
       }
     }
+
+    // Drop skipped/failed entries while preserving the successful result order.
     const ready: R[] = []
     for (const item of out) if (item.value !== undefined) ready.push(item.value)
     return ready
