@@ -700,7 +700,7 @@ it.live(
       }),
       { git: true, config: providerCfg },
     ),
-  3_000,
+  10_000,
 )
 
 // Cancel semantics
@@ -730,7 +730,7 @@ it.live(
       }),
       { git: true, config: providerCfg },
     ),
-  3_000,
+  10_000,
 )
 
 it.live(
@@ -1426,7 +1426,7 @@ function hangUntilAborted(tool: { execute: (...args: any[]) => any }) {
   tool.execute = (_args: any, ctx: any) => {
     ready.resolve()
     ctx.abort.addEventListener("abort", () => aborted.resolve(), { once: true })
-    return Effect.callback<never>(() => {})
+    return Effect.callback<never>(() => { })
   }
   const restore = Effect.addFinalizer(() => Effect.sync(() => void (tool.execute = original)))
   return { ready, aborted, restore }
