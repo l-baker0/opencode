@@ -32,6 +32,16 @@ export interface TextResult extends Result {
   text: string
 }
 
+export interface Interface {
+  readonly spawn: (cmd: string[], opts?: Options) => Child
+  readonly run: (cmd: string[], opts?: RunOptions) => Promise<Result>
+  readonly text: (cmd: string[], opts?: RunOptions) => Promise<TextResult>
+  readonly lines: (cmd: string[], opts?: RunOptions) => Promise<string[]>
+  readonly stop: (proc: ChildProcess) => Promise<void>
+  readonly git: (cmd: string[], opts?: RunOptions) => Promise<Result>
+  readonly shell: (cmd: string[], opts?: RunOptions) => Promise<Result>
+}
+
 export class RunFailedError extends Error {
   readonly cmd: string[]
   readonly code: number
@@ -143,6 +153,17 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
   throw new RunFailedError(cmd, out.code, out.stdout, out.stderr)
 }
 
+export async function git(cmd: string[], opts: RunOptions = {}): Promise<Result> {
+  return run(["git", ...cmd], opts)
+}
+
+export async function shell(cmd: string[], opts: RunOptions = {}): Promise<Result> {
+  return run(cmd, {
+    ...opts,
+    shell: true,
+  })
+}
+
 // Duplicated in `packages/sdk/js/src/process.ts` because the SDK cannot import
 // `opencode` without creating a cycle. Keep both copies in sync.
 export async function stop(proc: ChildProcess) {
@@ -172,3 +193,13 @@ export async function text(cmd: string[], opts: RunOptions = {}): Promise<TextRe
 export async function lines(cmd: string[], opts: RunOptions = {}): Promise<string[]> {
   return (await text(cmd, opts)).text.split(/\r?\n/).filter(Boolean)
 }
+
+export const defaultContext = {
+  spawn,
+  run,
+  text,
+  lines,
+  stop,
+  git,
+  shell,
+} satisfies Interface

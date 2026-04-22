@@ -1,4 +1,5 @@
 import { Layer, ManagedRuntime } from "effect"
+import { Context as UtilContext } from "@/util"
 
 import { Plugin } from "@/plugin"
 import { LSP } from "@/lsp"
@@ -26,4 +27,7 @@ export const BootstrapLayer = Layer.mergeAll(
   Bus.defaultLayer,
 ).pipe(Layer.provide(Observability.layer))
 
-export const BootstrapRuntime = ManagedRuntime.make(BootstrapLayer, { memoMap })
+export const BootstrapRuntime = ManagedRuntime.make(
+  Layer.provideMerge(BootstrapLayer, Layer.succeed(UtilContext.Service, UtilContext.defaultContext)),
+  { memoMap },
+)

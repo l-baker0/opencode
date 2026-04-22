@@ -1,5 +1,6 @@
 export * as Archive from "./archive"
 export * as Color from "./color"
+export * as Context from "./context"
 export * as Filesystem from "./filesystem"
 export * as Keybind from "./keybind"
 export * as LocalContext from "./local-context"

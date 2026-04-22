@@ -1,6 +1,7 @@
 import { Layer, ManagedRuntime } from "effect"
 import { attach } from "./run-service"
 import * as Observability from "./observability"
+import { Context as UtilContext } from "@/util"
 
 import { AppFileSystem } from "@opencode-ai/shared/filesystem"
 import { Bus } from "@/bus"
@@ -97,25 +98,34 @@ export const AppLayer = Layer.mergeAll(
   SessionShare.defaultLayer,
 ).pipe(Layer.provideMerge(Observability.layer))
 
-const rt = ManagedRuntime.make(AppLayer, { memoMap })
-type Runtime = Pick<typeof rt, "runSync" | "runPromise" | "runPromiseExit" | "runFork" | "runCallback" | "dispose">
-const wrap = (effect: Parameters<typeof rt.runSync>[0]) => attach(effect as never) as never
+export function createAppRuntime(context: UtilContext.AnyContext = UtilContext.defaultContext) {
+  const rt = ManagedRuntime.make(Layer.provideMerge(AppLayer, Layer.succeed(UtilContext.Service, context)), { memoMap })
+  const wrap = (effect: Parameters<typeof rt.runSync>[0]) => attach(effect as never) as never
 
-export const AppRuntime: Runtime = {
-  runSync(effect) {
-    return rt.runSync(wrap(effect))
-  },
-  runPromise(effect, options) {
-    return rt.runPromise(wrap(effect), options)
-  },
-  runPromiseExit(effect, options) {
-    return rt.runPromiseExit(wrap(effect), options)
-  },
-  runFork(effect) {
-    return rt.runFork(wrap(effect))
-  },
-  runCallback(effect) {
-    return rt.runCallback(wrap(effect))
-  },
-  dispose: () => rt.dispose(),
+  type Runtime = Pick<typeof rt, "runSync" | "runPromise" | "runPromiseExit" | "runFork" | "runCallback" | "dispose">
+
+  const runtime: Runtime = {
+    runSync(effect) {
+      return rt.runSync(wrap(effect))
+    },
+    runPromise(effect, options?) {
+      return rt.runPromise(wrap(effect), options)
+    },
+    runPromiseExit(effect, options?) {
+      return rt.runPromiseExit(wrap(effect), options)
+    },
+    runFork(effect) {
+      return rt.runFork(wrap(effect))
+    },
+    runCallback(effect) {
+      return rt.runCallback(wrap(effect))
+    },
+    dispose: () => rt.dispose(),
+  }
+
+  return runtime
 }
+
+export type Runtime = ReturnType<typeof createAppRuntime>
+
+export const AppRuntime = createAppRuntime()

@@ -346,6 +346,24 @@ describe("filesystem", () => {
     })
   })
 
+  describe("list() and remove()", () => {
+    test("lists directory entries and deletes files and directories", async () => {
+      await using tmp = await tmpdir()
+      const dirpath = path.join(tmp.path, "items")
+      const nested = path.join(dirpath, "nested")
+      await fs.mkdir(nested, { recursive: true })
+      await fs.writeFile(path.join(dirpath, "file.txt"), "content", "utf-8")
+
+      expect((await Filesystem.list(dirpath)).sort()).toEqual(["file.txt", "nested"])
+
+      await Filesystem.remove(path.join(dirpath, "file.txt"))
+      await Filesystem.remove(nested)
+
+      expect(await Filesystem.exists(path.join(dirpath, "file.txt"))).toBe(false)
+      expect(await Filesystem.exists(nested)).toBe(false)
+    })
+  })
+
   describe("mimeType()", () => {
     test("returns correct MIME type for JSON", async () => {
       expect(await Filesystem.mimeType("test.json")).toContain("application/json")

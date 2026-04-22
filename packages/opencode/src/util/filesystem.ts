@@ -1,10 +1,37 @@
-import { chmod, mkdir, readFile, stat as statFile, writeFile } from "fs/promises"
+import { chmod, mkdir, readFile, readdir, rm, stat as statFile, writeFile } from "fs/promises"
 import { createWriteStream, existsSync, statSync } from "fs"
 import { realpathSync } from "fs"
 import { dirname, isAbsolute, join, relative, resolve as pathResolve, win32 } from "path"
 import { Readable } from "stream"
 import { pipeline } from "stream/promises"
 import { Glob } from "@opencode-ai/shared/util/glob"
+
+export interface Interface {
+  readonly exists: (path: string) => Promise<boolean>
+  readonly isDir: (path: string) => Promise<boolean>
+  readonly stat: (path: string) => ReturnType<typeof statSync> | undefined
+  readonly statAsync: (path: string) => Promise<ReturnType<typeof statSync> | undefined>
+  readonly size: (path: string) => Promise<number>
+  readonly readText: (path: string) => Promise<string>
+  readonly readJson: <T = unknown>(path: string) => Promise<T>
+  readonly readBytes: (path: string) => Promise<Buffer>
+  readonly readArrayBuffer: (path: string) => Promise<ArrayBuffer>
+  readonly write: (path: string, content: string | Buffer | Uint8Array, mode?: number) => Promise<void>
+  readonly writeJson: (path: string, data: unknown, mode?: number) => Promise<void>
+  readonly writeStream: (path: string, stream: ReadableStream<Uint8Array> | Readable, mode?: number) => Promise<void>
+  readonly mimeType: (path: string) => Promise<string>
+  readonly normalizePath: (path: string) => string
+  readonly normalizePathPattern: (path: string) => string
+  readonly resolve: (path: string) => string
+  readonly windowsPath: (path: string) => string
+  readonly overlaps: (a: string, b: string) => boolean
+  readonly contains: (parent: string, child: string) => boolean
+  readonly findUp: typeof findUp
+  readonly up: (options: { targets: string[]; start: string; stop?: string }) => AsyncGenerator<string, void, void>
+  readonly globUp: (pattern: string, start: string, stop?: string) => Promise<string[]>
+  readonly remove: (path: string) => Promise<void>
+  readonly list: (path: string) => Promise<string[]>
+}
 
 // Fast sync version for metadata checks
 export async function exists(p: string): Promise<boolean> {
@@ -52,6 +79,10 @@ export async function readArrayBuffer(p: string): Promise<ArrayBuffer> {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
 }
 
+export async function remove(p: string): Promise<void> {
+  await rm(p, { recursive: true, force: true })
+}
+
 function isEnoent(e: unknown): e is { code: "ENOENT" } {
   return typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === "ENOENT"
 }
@@ -91,13 +122,17 @@ export async function writeStream(
     await mkdir(dir, { recursive: true })
   }
 
-  const nodeStream = stream instanceof ReadableStream ? Readable.fromWeb(stream as any) : stream
+  const nodeStream = stream instanceof ReadableStream ? Readable.fromWeb(stream as unknown as Parameters<typeof Readable.fromWeb>[0]) : stream
   const writeStream = createWriteStream(p)
   await pipeline(nodeStream, writeStream)
 
   if (mode) {
     await chmod(p, mode)
   }
+}
+
+export async function list(p: string): Promise<string[]> {
+  return readdir(p)
 }
 
 export async function mimeType(p: string): Promise<string> {
@@ -249,3 +284,30 @@ export async function globUp(pattern: string, start: string, stop?: string) {
   }
   return result
 }
+
+export const defaultContext = {
+  exists,
+  isDir,
+  stat,
+  statAsync,
+  size,
+  readText,
+  readJson,
+  readBytes,
+  readArrayBuffer,
+  write,
+  writeJson,
+  writeStream,
+  mimeType,
+  normalizePath,
+  normalizePathPattern,
+  resolve,
+  windowsPath,
+  overlaps,
+  contains,
+  findUp,
+  up,
+  globUp,
+  remove,
+  list,
+} satisfies Interface
