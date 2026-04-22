@@ -2,6 +2,7 @@ import { Effect, Layer, ManagedRuntime } from "effect"
 import * as Context from "effect/Context"
 import { Instance } from "@/project/instance"
 import { LocalContext } from "@/util"
+import { Context as UtilContext } from "@/util"
 import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import * as Observability from "./observability"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
@@ -35,9 +36,17 @@ export function attach<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A
   return effect
 }
 
-export function makeRuntime<I, S, E>(service: Context.Service<I, S>, layer: Layer.Layer<I, E>) {
+export function makeRuntime<I, S, E, R = never>(
+  service: Context.Service<I, S>,
+  layer: Layer.Layer<I, E, R>,
+  context: UtilContext.AnyContext = UtilContext.defaultContext,
+) {
   let rt: ManagedRuntime.ManagedRuntime<I, E> | undefined
-  const getRuntime = () => (rt ??= ManagedRuntime.make(Layer.provideMerge(layer, Observability.layer), { memoMap }))
+  const runtimeLayer = Layer.provideMerge(Layer.provideMerge(layer, Layer.succeed(UtilContext.Service, context)), Observability.layer) as Layer.Layer<
+    I,
+    E
+  >
+  const getRuntime = () => (rt ??= ManagedRuntime.make(runtimeLayer, { memoMap }))
 
   return {
     runSync: <A, Err>(fn: (svc: S) => Effect.Effect<A, Err, I>) => getRuntime().runSync(attach(service.use(fn))),

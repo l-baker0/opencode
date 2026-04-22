@@ -77,6 +77,12 @@ describe("util.process", () => {
     expect(out.stdout.toString()).toBe("set")
   })
 
+  test("git() delegates to the git executable", async () => {
+    const out = await Process.git(["--version"])
+    expect(out.code).toBe(0)
+    expect(out.stdout.toString().toLowerCase()).toContain("git version")
+  })
+
   test("uses shell in run on Windows", async () => {
     if (process.platform !== "win32") return
 

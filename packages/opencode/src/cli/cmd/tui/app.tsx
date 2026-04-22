@@ -154,9 +154,9 @@ export function tui(input: {
                     initialRoute={
                       input.args.continue
                         ? {
-                            type: "session",
-                            sessionID: "dummy",
-                          }
+                          type: "session",
+                          sessionID: "dummy",
+                        }
                         : undefined
                     }
                   >
@@ -568,20 +568,20 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     },
     ...(sync.data.console_state.switchableOrgCount > 1
       ? [
-          {
-            title: "Switch org",
-            value: "console.org.switch",
-            suggested: Boolean(sync.data.console_state.activeOrgName),
-            slash: {
-              name: "org",
-              aliases: ["orgs", "switch-org"],
-            },
-            onSelect: () => {
-              dialog.replace(() => <DialogConsoleOrg />)
-            },
-            category: "Provider",
+        {
+          title: "Switch org",
+          value: "console.org.switch",
+          suggested: Boolean(sync.data.console_state.activeOrgName),
+          slash: {
+            name: "org",
+            aliases: ["orgs", "switch-org"],
           },
-        ]
+          onSelect: () => {
+            dialog.replace(() => <DialogConsoleOrg />)
+          },
+          category: "Provider",
+        },
+      ]
       : []),
     {
       title: "View status",
@@ -641,7 +641,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       title: "Open docs",
       value: "docs.open",
       onSelect: () => {
-        open("https://opencode.ai/docs").catch(() => {})
+        open("https://opencode.ai/docs").catch(() => { })
         dialog.clear()
       },
       category: "System",

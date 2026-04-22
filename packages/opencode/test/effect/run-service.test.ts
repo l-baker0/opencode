@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test"
 import { Effect, Layer, Context } from "effect"
 import { makeRuntime } from "../../src/effect/run-service"
+import { Context as UtilContext } from "../../src/util"
 
-class Shared extends Context.Service<Shared, { readonly id: number }>()("@test/Shared") {}
+class Shared extends Context.Service<Shared, { readonly id: number }>()("@test/Shared") { }
 
 test("makeRuntime shares dependent layers through the shared memo map", async () => {
   let n = 0
@@ -15,7 +16,7 @@ test("makeRuntime shares dependent layers through the shared memo map", async ()
     }),
   )
 
-  class One extends Context.Service<One, { readonly get: () => Effect.Effect<number> }>()("@test/One") {}
+  class One extends Context.Service<One, { readonly get: () => Effect.Effect<number> }>()("@test/One") { }
   const one = Layer.effect(
     One,
     Effect.gen(function* () {
@@ -26,7 +27,7 @@ test("makeRuntime shares dependent layers through the shared memo map", async ()
     }),
   ).pipe(Layer.provide(shared))
 
-  class Two extends Context.Service<Two, { readonly get: () => Effect.Effect<number> }>()("@test/Two") {}
+  class Two extends Context.Service<Two, { readonly get: () => Effect.Effect<number> }>()("@test/Two") { }
   const two = Layer.effect(
     Two,
     Effect.gen(function* () {
@@ -43,4 +44,26 @@ test("makeRuntime shares dependent layers through the shared memo map", async ()
   expect(await runOne((svc) => svc.get())).toBe(1)
   expect(await runTwo((svc) => svc.get())).toBe(1)
   expect(n).toBe(1)
+})
+
+test("makeRuntime provides a runtime context override", async () => {
+  class CurrentContext extends Context.Service<CurrentContext, { readonly get: () => Effect.Effect<string> }>()("@test/CurrentContext") { }
+
+  const layer = Layer.effect(
+    CurrentContext,
+    Effect.gen(function* () {
+      const context = yield* UtilContext.Service
+      return CurrentContext.of({
+        get: () => Effect.succeed(context.kind),
+      })
+    }),
+  )
+
+  const { runPromise } = makeRuntime(CurrentContext, layer, {
+    ...UtilContext.defaultContext,
+    kind: "remote",
+    endpoint: "sandbox://test",
+  })
+
+  expect(await runPromise((svc) => svc.get())).toBe("remote")
 })
