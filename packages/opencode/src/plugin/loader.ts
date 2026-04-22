@@ -179,7 +179,7 @@ export namespace PluginLoader {
     const plan = candidate.plan
 
     // Deprecated plugin packages are silently ignored because they are now built in.
-    if (plan.deprecated) return
+    if (plan.deprecated) return { value: undefined, retry: false }
 
     report?.start?.(candidate, retry)
 
@@ -210,8 +210,11 @@ export namespace PluginLoader {
 
     // The default behavior is to return the successfully loaded plugin as-is, but callers can
     // provide a finisher to adapt the result into a more specific runtime shape.
-    if (!finish) return loaded.value as R
-    return finish(loaded.value, candidate.origin, retry)
+    if (!finish) return { value: loaded.value as R, retry: false }
+
+    const value = await finish(loaded.value, candidate.origin, retry)
+    if (value !== undefined) return { value, retry: false }
+    return { value: undefined, retry: !retry && shouldRetryFinish(loaded.value) }
   }
 
   type Input<R> = {

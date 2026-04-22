@@ -1,7 +1,7 @@
 import { render, TimeToFirstDraw, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import * as Clipboard from "@tui/util/clipboard"
 import * as Selection from "@tui/util/selection"
-import { createCliRenderer, MouseButton, type CliRendererConfig } from "@opentui/core"
+import { createCliRenderer, MouseButton, RGBA, type CliRendererConfig, type TerminalColors } from "@opentui/core"
 import { RouteProvider, useRoute } from "@tui/context/route"
 import {
   Switch,
@@ -103,6 +103,14 @@ function errorMessage(error: unknown) {
   return FormatUnknownError(error)
 }
 
+function detectThemeMode(colors: TerminalColors): "dark" | "light" {
+  const background = colors.defaultBackground ?? colors.palette[0]
+  if (!background) return "dark"
+  const { r, g, b } = RGBA.fromHex(background)
+  const luminance = 0.299 * r + 0.587 * g + 0.114 * b
+  return luminance > 0.5 ? "light" : "dark"
+}
+
 export function tui(input: {
   url: string
   args: Args
@@ -129,7 +137,7 @@ export function tui(input: {
     }
 
     const renderer = await createCliRenderer(rendererConfig(input.config))
-    const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+    const mode = await renderer.getPalette({ size: 16 }).then(detectThemeMode).catch((): "dark" => "dark")
 
     await render(() => {
       return (
