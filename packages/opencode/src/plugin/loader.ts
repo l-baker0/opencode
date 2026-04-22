@@ -10,6 +10,9 @@ import {
 } from "./shared"
 import { ConfigPlugin } from "@/config/plugin"
 import { InstallationVersion } from "@/installation/version"
+import { Filesystem } from "@/util"
+import path from "path"
+import { fileURLToPath } from "url"
 
 export namespace PluginLoader {
   // A normalized plugin declaration derived from config before any filesystem or npm work happens.
@@ -41,6 +44,7 @@ export namespace PluginLoader {
   }
 
   type Candidate = { origin: ConfigPlugin.Origin; plan: Plan }
+  type Attempt<R> = { value: R | undefined; retry: boolean }
   type Report = {
     // Called before each attempt so callers can log initial load attempts and retries uniformly.
     start?: (candidate: Candidate, retry: boolean) => void
@@ -127,6 +131,41 @@ export namespace PluginLoader {
     return { ok: true, value: { ...row, mod } }
   }
 
+  function pathForSpec(spec: string) {
+    return spec.startsWith("file://") ? fileURLToPath(spec) : path.resolve(spec)
+  }
+
+  async function isDirectory(spec: string) {
+    const stat = await Filesystem.statAsync(pathForSpec(spec))
+    return stat?.isDirectory() ?? false
+  }
+
+  async function shouldRetryLoad(load: Resolved, error: unknown) {
+    if (!(error instanceof Error)) return false
+    if (!/ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find (?:module|package)|Failed to resolve module/i.test(error.message)) {
+      return false
+    }
+    if (pluginSource(load.spec) !== "file") return false
+    if (!load.entry.startsWith("file://")) return false
+    return await Filesystem.exists(fileURLToPath(load.entry))
+  }
+
+  async function shouldRetryInstall(spec: string, error: unknown) {
+    if (pluginSource(spec) !== "file") return false
+    if (!(error instanceof Error)) return false
+    if (!/missing package\.json or index file/i.test(error.message)) return false
+    return await isDirectory(spec)
+  }
+
+  async function shouldRetryMissing(resolved: Missing) {
+    if (resolved.source !== "file") return false
+    return await isDirectory(resolved.target)
+  }
+
+  function shouldRetryFinish(load: Loaded) {
+    return pluginSource(load.spec) === "file"
+  }
+
   // Run one candidate through the full pipeline: resolve, optionally surface a missing entry,
   // import the module, and finally let the caller transform the loaded plugin into any result type.
   async function attempt<R>(
@@ -136,11 +175,11 @@ export namespace PluginLoader {
     finish: ((load: Loaded, origin: ConfigPlugin.Origin, retry: boolean) => Promise<R | undefined>) | undefined,
     missing: ((value: Missing, origin: ConfigPlugin.Origin, retry: boolean) => Promise<R | undefined>) | undefined,
     report: Report | undefined,
-  ): Promise<R | undefined> {
+  ): Promise<Attempt<R>> {
     const plan = candidate.plan
 
     // Deprecated plugin packages are silently ignored because they are now built in.
-    if (plan.deprecated) return
+    if (plan.deprecated) return { value: undefined, retry: false }
 
     report?.start?.(candidate, retry)
 
@@ -151,25 +190,31 @@ export namespace PluginLoader {
         // for example to load theme files from a tui plugin package that has no code entrypoint.
         if (missing) {
           const value = await missing(resolved.value, candidate.origin, retry)
-          if (value !== undefined) return value
+          if (value !== undefined) return { value, retry: false }
         }
-        report?.missing?.(candidate, retry, resolved.value.message, resolved.value)
-        return
+        const retryable = !retry && (await shouldRetryMissing(resolved.value))
+        if (!retryable) report?.missing?.(candidate, retry, resolved.value.message, resolved.value)
+        return { value: undefined, retry: retryable }
       }
-      report?.error?.(candidate, retry, resolved.stage, resolved.error)
-      return
+      const retryable = !retry && resolved.stage === "install" && (await shouldRetryInstall(plan.spec, resolved.error))
+      if (!retryable) report?.error?.(candidate, retry, resolved.stage, resolved.error)
+      return { value: undefined, retry: retryable }
     }
 
     const loaded = await load(resolved.value)
     if (!loaded.ok) {
-      report?.error?.(candidate, retry, "load", loaded.error, resolved.value)
-      return
+      const retryable = !retry && (await shouldRetryLoad(resolved.value, loaded.error))
+      if (!retryable) report?.error?.(candidate, retry, "load", loaded.error, resolved.value)
+      return { value: undefined, retry: retryable }
     }
 
     // The default behavior is to return the successfully loaded plugin as-is, but callers can
     // provide a finisher to adapt the result into a more specific runtime shape.
-    if (!finish) return loaded.value as R
-    return finish(loaded.value, candidate.origin, retry)
+    if (!finish) return { value: loaded.value as R, retry: false }
+
+    const value = await finish(loaded.value, candidate.origin, retry)
+    if (value !== undefined) return { value, retry: false }
+    return { value: undefined, retry: !retry && shouldRetryFinish(loaded.value) }
   }
 
   type Input<R> = {
@@ -188,29 +233,22 @@ export namespace PluginLoader {
   // step happening elsewhere before their entrypoint becomes loadable.
   export async function loadExternal<R = Loaded>(input: Input<R>): Promise<R[]> {
     const candidates = input.items.map((origin) => ({ origin, plan: plan(origin.spec) }))
-    const list: Array<Promise<R | undefined>> = []
+    const list: Array<Promise<Attempt<R>>> = []
     for (const candidate of candidates) {
       list.push(attempt(candidate, input.kind, false, input.finish, input.missing, input.report))
     }
     const out = await Promise.all(list)
-    if (input.wait) {
-      let deps: Promise<void> | undefined
-      for (let i = 0; i < candidates.length; i++) {
-        if (out[i] !== undefined) continue
-
-        // Only local file plugins are retried. npm plugins already attempted installation during
-        // the first pass, while file plugins may need the caller's dependency preparation to finish.
-        const candidate = candidates[i]
-        if (!candidate || pluginSource(candidate.plan.spec) !== "file") continue
-        deps ??= input.wait()
-        await deps
-        out[i] = await attempt(candidate, input.kind, true, input.finish, input.missing, input.report)
+    if (input.wait && out.some((item) => item.retry)) {
+      await input.wait().catch(() => undefined)
+      for (let index = 0; index < candidates.length; index++) {
+        if (!out[index].retry) continue
+        out[index] = await attempt(candidates[index], input.kind, true, input.finish, input.missing, input.report)
       }
     }
 
     // Drop skipped/failed entries while preserving the successful result order.
     const ready: R[] = []
-    for (const item of out) if (item !== undefined) ready.push(item)
+    for (const item of out) if (item.value !== undefined) ready.push(item.value)
     return ready
   }
 }

@@ -27,17 +27,17 @@ function boot(input: { directory: string; init?: () => Promise<any>; worktree?: 
     const ctx =
       input.project && input.worktree
         ? {
-            directory: input.directory,
-            worktree: input.worktree,
-            project: input.project,
-          }
+          directory: input.directory,
+          worktree: input.worktree,
+          project: input.project,
+        }
         : await project
-            .runPromise((svc) => svc.fromDirectory(input.directory))
-            .then(({ project, sandbox }) => ({
-              directory: input.directory,
-              worktree: sandbox,
-              project,
-            }))
+          .runPromise((svc) => svc.fromDirectory(input.directory))
+          .then(({ project, sandbox }) => ({
+            directory: input.directory,
+            worktree: sandbox,
+            project,
+          }))
     await context.provide(ctx, async () => {
       await input.init?.()
     })

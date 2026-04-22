@@ -46,6 +46,15 @@ import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
 import { Permission } from "@/permission"
 
+function isDependencyImportError(error: unknown) {
+  if (!(error instanceof Error)) return false
+  const message = error.message
+  if (/ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i.test(message)) return true
+  if (/Cannot find (?:module|package)/i.test(message)) return true
+  if (/Failed to resolve module/i.test(message)) return true
+  return false
+}
+
 const log = Log.create({ service: "tool.registry" })
 
 type TaskDef = Tool.InferDef<typeof TaskTool>
@@ -65,7 +74,7 @@ export interface Interface {
   readonly tools: (model: { providerID: ProviderID; modelID: ModelID; agent: Agent.Info }) => Effect.Effect<Tool.Def[]>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/ToolRegistry") {}
+export class Service extends Context.Service<Service, Interface>()("@opencode/ToolRegistry") { }
 
 export const layer: Layer.Layer<
   Service,
@@ -154,12 +163,23 @@ export const layer: Layer.Layer<
         const matches = dirs.flatMap((dir) =>
           Glob.scanSync("{tool,tools}/*.{js,ts}", { cwd: dir, absolute: true, dot: true, symlink: true }),
         )
-        if (matches.length) yield* config.waitForDependencies()
+
+        const loadModule = Effect.fn("ToolRegistry.loadModule")(function* (match: string) {
+          const url = pathToFileURL(match).href
+          const load = () => import(url)
+          return yield* Effect.promise(load).pipe(
+            Effect.catchIf(isDependencyImportError, () =>
+              Effect.gen(function* () {
+                yield* config.waitForDependencies()
+                return yield* Effect.promise(load)
+              }),
+            ),
+          )
+        })
+
         for (const match of matches) {
           const namespace = path.basename(match, path.extname(match))
-          const mod = yield* Effect.promise(
-            () => import(process.platform === "win32" ? match : pathToFileURL(match).href),
-          )
+          const mod = yield* loadModule(match)
           for (const [id, def] of Object.entries<ToolDefinition>(mod)) {
             custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def))
           }

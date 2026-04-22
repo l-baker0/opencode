@@ -204,13 +204,17 @@ function pathArgs(list: Part[], ps: boolean) {
       want = false
       continue
     }
-    if (item.type === "command_parameter") {
-      const flag = item.text.toLowerCase()
-      if (SWITCHES.has(flag)) continue
-      want = FLAGS.has(flag)
+    if (item.type !== "command_parameter") {
+      out.push(item.text)
       continue
     }
-    out.push(item.text)
+    if (!item.text.startsWith("-")) {
+      out.push(item.text)
+      continue
+    }
+    const flag = item.text.toLowerCase()
+    if (SWITCHES.has(flag)) continue
+    want = FLAGS.has(flag)
   }
   return out
 }
